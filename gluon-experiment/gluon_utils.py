@@ -124,7 +124,7 @@ def _fit_l0_l1(data: np.ndarray, lambda_penalty: float = 1.0):
     grad_diff_norms, param_update_norms, next_grad_norms = data.T
     
     # L_hat is the "true" measured smoothness at each step
-    L_hat = grad_diff_norms / param_update_norms
+    L_hat = grad_diff_norms / (param_update_norms + 1e-10)
 
     def objective_function(params):
         l0, l1 = params

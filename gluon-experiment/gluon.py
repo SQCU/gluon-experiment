@@ -102,13 +102,16 @@ class Gluon(Muon):
             epsilon=epsilon,
             nesterov=nesterov,
             flatten=flatten,
-            adjust_lr=adjust_lr,
+            #adjust_lr=adjust_lr,
+            #dont initialize adjust_lr... 
+            # non-passing defaults to None in the superclass...
         )
         super().__init__(params, defaults)
-    
-    # We can also set the default algorithm type more explicitly here
-    for group in self.param_groups:
-        group.setdefault("algorithm", "gluon")
+
+        # clonnet linted this tab depth
+        # We can also set the default algorithm type more explicitly here
+        for group in self.param_groups:
+            group.setdefault("algorithm", "gluon")
 
     def _create_muon_tasks(
         self,
@@ -210,8 +213,8 @@ def gluon_update_batch_async(
     X: List[Tensor],
     G: List[Tensor],
     M: List[Tensor],
-    L0s: List[Tensor],
-    L1s: List[Tensor],
+    l0: float,  # Single value, not a list
+    l1: float,
     base_lr_for_wd: Tensor,
     momentum: Tensor,
     weight_decay: Tensor,
@@ -234,6 +237,7 @@ def gluon_update_batch_async(
     assert len(X) == world_size
 
     # Create tensors once here
+    #this part is changed to transdfuce the function operands to the next function
     L0s_tensor = torch.tensor(l0, device=X[0].device)
     L1s_tensor = torch.tensor(l1, device=X[0].device)
 
