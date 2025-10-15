@@ -41,7 +41,7 @@ version = "0.1.0"  # versions < 1.0 are considered pre-release versions, which a
 
 setup(
     # Name of the package:
-    name="gluon-experiment",
+    name="gluon_experiment",
     # Version of the package:
     version=version,
     # Find the package automatically (include everything):
