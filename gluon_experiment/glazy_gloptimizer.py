@@ -41,14 +41,31 @@ class GlazyGloptimizer(Optimizer):
         **kwargs: Hyperparameters for the AdamW optimizer used during the
             profiling phase (e.g., `lr`, `weight_decay`, `betas`).
     """
-    def __init__(self, model: torch.nn.Module, log_dir: str = "./glazy_gluon", **kwargs):
-        self.model = model
+    def __init__(self, params, log_dir: str = "./glazy_gluon", **kwargs):
+        """
+        Final, corrected __init__ signature. Conforms to the standard
+        torch.optim.Optimizer API: __init__(self, params, **defaults).
+
+        Args:
+            params: The standard iterable of parameters or parameter groups.
+            log_dir (str, optional): Directory to store logs and configs.
+            **kwargs: Hyperparameters for the AdamW profiler and base optimizer.
+        """
+        # The `params` argument can be an iterator, so we convert it to a list
+        # to ensure we can inspect it and pass it on.
+        param_groups = list(params)
+
+        # We must call the base Optimizer's __init__ first.
+        # It handles parsing the parameter groups and setting up self.param_groups.
+        # We pass the user's kwargs as the defaults.
+        super().__init__(param_groups, kwargs)
+
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         
         self._setup_logging()
 
-        # Generate a unique path for the config based on the model architecture
+        # Generate a unique path for the config based on the parameters
         model_hash = self._get_model_hash()
         self.config_path = self.log_dir / f"config_{model_hash}.yaml"
 
@@ -56,22 +73,29 @@ class GlazyGloptimizer(Optimizer):
         self._internal_optimizer: Optimizer
 
         if self.is_profiling:
-            self._initialize_profiling_mode(kwargs)
+            self._initialize_profiling_mode()
         else:
             self._initialize_gluon_mode()
-
-        # The base Optimizer class requires a `param_groups` attribute. We'll
-        # delegate this to our internal optimizer.
-        # This is a bit of a hack to make the wrapper conform to the Optimizer API.
-        # The `defaults` dict is also required, but can be empty.
-        super().__init__(self._internal_optimizer.param_groups, {})
+        
+        # We need to sync our param_groups with the internal optimizer's.
+        # This is a bit of a trick to make this wrapper work seamlessly.
+        self.param_groups = self._internal_optimizer.param_groups
 
 
     def _get_model_hash(self) -> str:
-        """Creates a simple hash based on the model's parameter names."""
-        # A simple but effective way to identify a model architecture.
-        param_names = "_".join(self.model.state_dict().keys())
-        return str(abs(hash(param_names)))
+        """
+        Creates a simple but stable hash based on the shapes of the parameters
+        being optimized. This does not require the full model object.
+        """
+        # A signature is created from the shapes of all tensors in all groups.
+        # e.g., "768_320_768_768_..."
+        signature_parts = []
+        for group in self.param_groups:
+            for p in group['params']:
+                signature_parts.extend(str(s) for s in p.shape)
+        
+        signature = "_".join(signature_parts)
+        return str(abs(hash(signature)))
 
     def _setup_logging(self):
         """Sets up a logger that writes detailed info to a file."""
