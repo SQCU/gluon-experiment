@@ -66,6 +66,7 @@ class Muon(Optimizer):
         flatten: bool = False,
         use_triton: bool = False,
         newton_schulz_func: Optional[Callable] = None,
+        **kwargs,
     ):
         # Check hyperparameters
         if lr < 0.0:
@@ -92,6 +93,7 @@ class Muon(Optimizer):
             nesterov=nesterov,
             flatten=flatten,
             adjust_lr=adjust_lr,
+            **kwargs,
         )
         super().__init__(params, defaults)
 
