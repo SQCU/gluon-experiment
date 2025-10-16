@@ -176,19 +176,13 @@ def gluanalyze(log_dir: str, lambda_penalty: float = 1.0) -> Dict[str, Any]:
         print(f"  - Processing group: {group_name}")
         
         try:
-            data = np.loadtxt(csv_file, delimiter=',', skiprows=1)
-            if data.shape[0] < 10: # Need some data to fit
-                print(f"    - Skipping {group_name}, not enough data points.")
-                continue
-            
-            l0, l1 = _fit_l0_l1(data, lambda_penalty)
-            # CRITICAL FIX: Cast NumPy floats to native Python floats before saving
-            l0, l1 = float(l0_np), float(l1_np)
+            # Unpack from the fitting function
+            l0_from_fit, l1_from_fit = _fit_l0_l1(data, lambda_penalty)
+            # Cast to native Python floats
+            l0 = float(l0_from_fit)
+            l1 = float(l1_from_fit)
             print(f"    - Fitted L0={l0:.4f}, L1={l1:.4f}")
-            
-            # For simplicity, we put everything in overrides. Can be refined later.
             config["hyperparameters"]["overrides"][group_name] = {"l0": l0, "l1": l1}
-
         except Exception as e:
             print(f"    - Failed to process {group_name}: {e}")
             
