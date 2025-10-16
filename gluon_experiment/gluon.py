@@ -106,7 +106,7 @@ class Gluon(Muon):
             #dont initialize adjust_lr... 
             # non-passing defaults to None in the superclass...
         )
-        super().__init__(params, defaults)
+        super().__init__(params, **defaults)
 
         # clonnet linted this tab depth
         # We can also set the default algorithm type more explicitly here
