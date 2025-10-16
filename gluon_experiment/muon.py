@@ -66,7 +66,6 @@ class Muon(Optimizer):
         flatten: bool = False,
         use_triton: bool = False,
         newton_schulz_func: Optional[Callable] = None,
-        algorithm = "muon",
     ):
         # Check hyperparameters
         if lr < 0.0:
@@ -87,14 +86,14 @@ class Muon(Optimizer):
             beta1=betas[0],
             beta2=betas[1],
             weight_decay=weight_decay,
-            algorithm=algorithm,
+            algorithm="muon",
             step=0,
             epsilon=epsilon,
             nesterov=nesterov,
             flatten=flatten,
             adjust_lr=adjust_lr,
         )
-        super().__init__(params, **defaults)
+        super().__init__(params, defaults)
 
         # Distributed configuration
         if isinstance(distributed_mesh, DeviceMesh):

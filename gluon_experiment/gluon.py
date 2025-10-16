@@ -67,51 +67,78 @@ class Gluon(Muon):
     def __init__(
         self,
         params: ParamsT,
-        distributed_mesh: Optional[Union[DeviceMesh, ProcessGroup]] = None,
         lr: float = 1.0,
         mu: float = 0.95,
         betas: Tuple[float, float] = (0.9, 0.95),
         weight_decay: float = 0.01,
-        algorithm = "gluon",
         epsilon: float = 1e-8,
         nesterov: bool = False,
         flatten: bool = False,
         use_triton: bool = False,
         newton_schulz_func: Optional[Callable] = None,
+        distributed_mesh: Optional[Union[DeviceMesh, ProcessGroup]] = None,
     ):
-        # Validate that user has provided L0/L1 for all Gluon groups *before* init
-        # This requires converting params from an iterator to a list if needed
+        # 1. Prepare the parameter groups. This is where we ensure 'algorithm' and L0/L1 exist.
+        #    This does NOT affect the arguments passed to the parent constructor.
         param_groups = list(params)
+        defaults_for_groups = {
+            'lr': lr, 'mu': mu, 'beta1': betas[0], 'beta2': betas[1],
+            'weight_decay': weight_decay, 'epsilon': epsilon, 'nesterov': nesterov,
+            'flatten': flatten
+        }
         for group in param_groups:
-            if group.get("algorithm", "gluon") == "gluon":
+            # Ensure 'algorithm' key exists in the group for later dispatch.
+            group.setdefault("algorithm", "gluon")
+            
+            if group["algorithm"] == "gluon":
                 if "l0" not in group or "l1" not in group:
                     raise ValueError(
                         "Parameter groups with algorithm='gluon' must include 'l0' and 'l1' keys."
                     )
-        # Call the parent __init__ only ONCE with the fully formed groups and defaults.
-        # The `adjust_lr` parameter is intentionally not passed, so it uses its default (None)
-        # inside the Muon init, which is fine as we never use it.
-        # Default arguments for each param group
-        defaults = dict(
-            lr=lr,
-            mu=mu,
-            betas=betas,    #gee thanks gemini
-            weight_decay=weight_decay,
-            algorithm=algorithm,
-            step=0,
-            epsilon=epsilon,
-            nesterov=nesterov,
-            flatten=flatten,
-            #adjust_lr=adjust_lr,
-            #dont initialize adjust_lr... 
-            # non-passing defaults to None in the superclass...
-        )
-        super().__init__(params, **defaults)
+            # Fill in other defaults, just like the base Optimizer does.
+            for k, v in defaults_for_groups.items():
+                group.setdefault(k, v)
 
-        # clonnet linted this tab depth
-        # We can also set the default algorithm type more explicitly here
-        for group in self.param_groups:
-            group.setdefault("algorithm", "gluon")
+        # 2. Call the original torch.optim.Optimizer's __init__.
+        #    This is the most fundamental base class. It simply stores the param_groups.
+        #    We create a dummy `defaults` dict here because the base class requires it.
+        Optimizer.__init__(self, param_groups, {})
+
+        # 3. CRITICAL FIX: Manually initialize the parts of the Muon optimizer
+        #    that we actually need, using only the arguments it accepts.
+        #    This bypasses the strict signature of Muon.__init__ by setting the
+        #    attributes directly, just like the original Muon.__init__ does.
+        
+        # Copied from the start of Muon.__init__
+        if isinstance(distributed_mesh, DeviceMesh):
+            if distributed_mesh.ndim != 1:
+                raise ValueError(f"Only 1D DeviceMesh is supported, but got {distributed_mesh.ndim}D.")
+            self._device_rank = distributed_mesh.get_local_rank()
+            self._world_size = distributed_mesh.size()
+            self._process_group = distributed_mesh.get_group()
+        elif isinstance(distributed_mesh, ProcessGroup):
+            self._device_rank = dist.get_rank(distributed_mesh)
+            self._world_size = dist.get_world_size(distributed_mesh)
+            self._process_group = distributed_mesh
+        elif distributed_mesh is None:
+            self._device_rank = 0
+            self._world_size = 1
+            self._process_group = None
+        else:
+            raise TypeError(f"Invalid distributed_mesh type: {type(distributed_mesh)}. Expected DeviceMesh or ProcessGroup.")
+        self._distributed_mesh = distributed_mesh
+
+        # Copied from the end of Muon.__init__
+        if newton_schulz_func is not None:
+            if not callable(newton_schulz_func):
+                raise TypeError(f"newton_schulz_func must be a callable function, got {type(newton_schulz_func)}")
+            self._newton_schulz_func = newton_schulz_func
+        elif use_triton:
+            self._newton_schulz_func = newton_schulz_triton
+        else:
+            # We need to import the default function if it's not provided
+            from .muon import zeropower_via_newtonschulz5
+            self._newton_schulz_func = zeropower_via_newtonschulz5
 
     def _create_muon_tasks(
         self,
