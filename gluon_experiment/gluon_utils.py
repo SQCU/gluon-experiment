@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch.optim import Optimizer, AdamW
 from scipy.optimize import minimize
 import numpy as np
+from typing import Optional
 
 # --- Component 1: The Adam Hooking Profiler ---
 
