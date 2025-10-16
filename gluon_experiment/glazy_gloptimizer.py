@@ -120,29 +120,21 @@ class GlazyGloptimizer(Optimizer):
         print("="*60)
         self.logger.info("Initializing in Profiling Mode.")
 
-        # Create simple named parameter groups for AdamW
-        param_groups = []
-        for name, module in self.model.named_modules():
-            # Filter out the top-level module and empty modules
-            if "." in name and list(module.parameters(recurse=False)):
-                param_groups.append({
-                    "params": module.parameters(recurse=False),
-                    "name": name.replace('.', '_') # Make names file-system friendly
-                })
-        
-        # Add any remaining parameters to a default group
-        all_grouped_params = {p for group in param_groups for p in group['params']}
-        remaining_params = [p for p in self.model.parameters() if p not in all_grouped_params and p.requires_grad]
-        if remaining_params:
-            param_groups.append({"params": remaining_params, "name": "default_params"})
+        # Ensure param groups have names for logging.
+        for i, group in enumerate(self.param_groups):
+            group.setdefault('name', f'group_{i}')
 
-        adam_optimizer = torch.optim.AdamW(param_groups, **adamw_kwargs)
+        # We need to extract the AdamW-specific kwargs from our defaults
+        adamw_kwargs = {
+            k: v for k, v in self.defaults.items() 
+            if k in ['lr', 'betas', 'eps', 'weight_decay', 'amsgrad']
+        }
         
-        # Wrap AdamW with our profiler
+        adam_optimizer = torch.optim.AdamW(self.param_groups, **adamw_kwargs)
+        
         self.profiler_stats_dir = self.log_dir / "stats"
         self._internal_optimizer = GluonProfiler(adam_optimizer, log_dir=str(self.profiler_stats_dir))
 
-        # Register the analysis function to run automatically on clean exit
         atexit.register(self._on_exit_profiling)
 
     def _on_exit_profiling(self):
@@ -181,15 +173,37 @@ class GlazyGloptimizer(Optimizer):
         config["hyperparameters"]["default"].setdefault("algorithm", "adamw")
         config["hyperparameters"]["default"].setdefault("lr", 1e-4) # Sensible default for AdamW
 
-        gluon_param_groups = gluon_that_model(self.model, config)
-        
-        # Add the 'gluon' algorithm tag where L0/L1 are defined, as this is
-        # used by the Gluon optimizer's internal dispatch logic.
-        for group in gluon_param_groups:
-            if "l0" in group and "l1" in group:
-                group["algorithm"] = "gluon"
+        gluon_param_groups = self._gluonify_param_groups(config)
 
         self._internal_optimizer = Gluon(gluon_param_groups)
+
+    def _gluonify_param_groups(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        A new helper function that applies a loaded config directly to the
+        existing parameter groups, without needing the full model object.
+        """
+        hyperparams = config.get("hyperparameters", {})
+        overrides = hyperparams.get("overrides", {})
+        default_hparams = hyperparams.get("default", {})
+
+        new_param_groups = []
+        for group in self.param_groups:
+            group_name = group.get('name', 'default')
+            
+            # Find the right config for this group
+            group_config = overrides.get(group_name, default_hparams)
+            
+            if "l0" in group_config and "l1" in group_config:
+                group['algorithm'] = 'gluon'
+                group['l0'] = group_config['l0']
+                group['l1'] = group_config['l1']
+            else:
+                group['algorithm'] = 'adamw'
+            
+            new_param_groups.append(group)
+        
+        print("[GlazyGloptimizer] Applied Gluon config to parameter groups.")
+        return new_param_groups
 
     # --- Pass-through methods to the internal optimizer ---
 
