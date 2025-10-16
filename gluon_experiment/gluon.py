@@ -94,8 +94,7 @@ class Gluon(Muon):
         defaults = dict(
             lr=lr,
             mu=mu,
-            beta1=betas[0],
-            beta2=betas[1],
+            betas=betas,    #gee thanks gemini
             weight_decay=weight_decay,
             algorithm="gluon",
             step=0,
