@@ -5,6 +5,7 @@ import atexit
 import logging
 from pathlib import Path
 from torch.optim import Optimizer
+from typing import Callable, Dict, Generator, List, Optional, Tuple, Union
 
 # --- Imports from our own library ---
 from .gluon import Gluon
