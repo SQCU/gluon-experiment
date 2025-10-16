@@ -126,6 +126,22 @@ class GluonProfiler:
                     writer.writerow(buf.popleft())
         print(f"[GluonProfiler] Flushed statistics for groups: {list(names_to_flush)}")
 
+    def zero_grad(self, set_to_none: bool = True):
+        """Passes the zero_grad call to the wrapped optimizer."""
+        self._optimizer.zero_grad(set_to_none=set_to_none)
+
+    def state_dict(self):
+        """Passes the state_dict call to the wrapped optimizer."""
+        return self._optimizer.state_dict()
+
+    def load_state_dict(self, state_dict):
+        """Passes the load_state_dict call to the wrapped optimizer."""
+        self._optimizer.load_state_dict(state_dict)
+
+    @property
+    def state(self):
+        """Allows access to the wrapped optimizer's state."""
+        return self._optimizer.state
 
 # --- Component 2: The gluanalyze() Fitting Script ---
 
