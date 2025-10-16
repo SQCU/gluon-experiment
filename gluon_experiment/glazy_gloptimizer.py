@@ -85,18 +85,31 @@ class GlazyGloptimizer(Optimizer):
 
     def _get_model_hash(self) -> str:
         """
-        Creates a simple but stable hash based on the shapes of the parameters
-        being optimized. This does not require the full model object.
+        Creates a simple but STABLE and DETERMINISTIC hash based on the shapes
+        and names of the parameters being optimized. This is robust to the
+        order in which parameter groups are passed.
         """
         # A signature is created from the shapes of all tensors in all groups.
-        # e.g., "768_320_768_768_..."
-        signature_parts = []
-        for group in self.param_groups:
-            for p in group['params']:
-                signature_parts.extend(str(s) for s in p.shape)
+        # We will collect a signature for each parameter and then sort them
+        # to ensure the final hash is order-independent.
         
-        signature = "_".join(signature_parts)
-        return str(abs(hash(signature)))
+        param_signatures = []
+        for group in self.param_groups:
+            group_name = group.get('name', 'default')
+            for i, p in enumerate(group['params']):
+                # Create a unique, sortable string for each parameter
+                # e.g., "group_name_0_768_320"
+                shape_str = "_".join(str(s) for s in p.shape)
+                param_sig = f"{group_name}_{i}_{shape_str}"
+                param_signatures.append(param_sig)
+        
+        # Sort the individual parameter signatures alphabetically
+        param_signatures.sort()
+        
+        # Join the sorted signatures into one final string
+        final_signature = "|".join(param_signatures)
+        
+        return str(abs(hash(final_signature)))
 
     def _setup_logging(self):
         """Sets up a logger that writes detailed info to a file."""
