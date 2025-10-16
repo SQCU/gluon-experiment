@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from torch.optim import Optimizer
 from typing import Callable, Dict, Generator, List, Optional, Tuple, Union, Any
+import hashlib
 
 # --- Imports from our own library ---
 from .gluon import Gluon
@@ -87,29 +88,36 @@ class GlazyGloptimizer(Optimizer):
         """
         Creates a simple but STABLE and DETERMINISTIC hash based on the shapes
         and names of the parameters being optimized. This is robust to the
-        order in which parameter groups are passed.
+        order in which parameter groups are passed and is deterministic
+        across Python processes.
         """
-        # A signature is created from the shapes of all tensors in all groups.
-        # We will collect a signature for each parameter and then sort them
-        # to ensure the final hash is order-independent.
-        
         param_signatures = []
         for group in self.param_groups:
             group_name = group.get('name', 'default')
             for i, p in enumerate(group['params']):
-                # Create a unique, sortable string for each parameter
-                # e.g., "group_name_0_768_320"
                 shape_str = "_".join(str(s) for s in p.shape)
                 param_sig = f"{group_name}_{i}_{shape_str}"
                 param_signatures.append(param_sig)
         
-        # Sort the individual parameter signatures alphabetically
         param_signatures.sort()
         
-        # Join the sorted signatures into one final string
         final_signature = "|".join(param_signatures)
         
-        return str(abs(hash(final_signature)))
+        # --- THE CRITICAL FIX ---
+        # Use hashlib.sha256 for a deterministic hash instead of the
+        # built-in, non-deterministic hash().
+
+        # 1. Encode the string to bytes, as hashing functions operate on bytes.
+        signature_bytes = final_signature.encode('utf-8')
+        
+        # 2. Create a sha256 hash object and update it with the bytes.
+        sha256_hash = hashlib.sha256(signature_bytes)
+        
+        # 3. Get the hexadecimal representation of the hash.
+        #    We can truncate it to a reasonable length for the filename.
+        deterministic_hash = sha256_hash.hexdigest()
+        
+        return deterministic_hash[:16] # Return the first 16 characters for a clean filename
 
     def _setup_logging(self):
         """Sets up a logger that writes detailed info to a file."""
