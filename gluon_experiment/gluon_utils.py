@@ -182,6 +182,8 @@ def gluanalyze(log_dir: str, lambda_penalty: float = 1.0) -> Dict[str, Any]:
                 continue
             
             l0, l1 = _fit_l0_l1(data, lambda_penalty)
+            # CRITICAL FIX: Cast NumPy floats to native Python floats before saving
+            l0, l1 = float(l0_np), float(l1_np)
             print(f"    - Fitted L0={l0:.4f}, L1={l1:.4f}")
             
             # For simplicity, we put everything in overrides. Can be refined later.
