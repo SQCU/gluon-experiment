@@ -31,6 +31,15 @@ class GluonProfiler:
     """
     def __init__(self, optimizer: Optimizer, log_dir: str = "./gluon_stats", flush_interval: int = 1000):
         self._optimizer = optimizer
+        
+        # --- THE FIX ---
+        # A real optimizer has a `param_groups` attribute. Our wrapper needs one too.
+        # We'll just point to the wrapped optimizer's param_groups.
+        self.param_groups = self._optimizer.param_groups
+        # A real optimizer also has a `defaults` attribute.
+        self.defaults = self._optimizer.defaults
+        # ---------------
+
         self.log_dir = Path(log_dir)
         self.flush_interval = flush_interval
 
