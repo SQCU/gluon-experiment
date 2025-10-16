@@ -129,6 +129,56 @@ class Gluon(Muon):
             from .muon import zeropower_via_newtonschulz5
             self._newton_schulz_func = zeropower_via_newtonschulz5
 
+    @torch.no_grad()
+    def step(self, closure=None):
+        """
+        (OVERRIDE) Perform a single optimization step.
+
+        This method is an override of the parent Muon.step() to make the
+        dispatch loop aware of the 'gluon' algorithm type.
+        """
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        muon_groups = []
+        lion_groups = []
+        adamw_groups = []
+
+        for group in self.param_groups:
+            # Increment step
+            group["step"] += 1
+
+            # Split parameter groups by algorithm
+            algo = group["algorithm"]
+
+            # --- THE CRITICAL FIX IS HERE ---
+            # We now treat 'gluon' as a valid, muon-like algorithm.
+            if algo in ["muon", "gluon"]:
+                muon_groups.append(group)
+            # --------------------------------
+
+            elif algo == "lion":
+                lion_groups.append(group)
+            elif algo == "adamw":
+                adamw_groups.append(group)
+            else:
+                raise ValueError(f"Unknown algorithm: {algo}")
+
+        # Create async tasks for each algorithm
+        # When this is called, `self` is a Gluon instance, so self._create_muon_tasks()
+        # will correctly call OUR overridden version from this class!
+        muon_tasks = self._create_muon_tasks(muon_groups)
+        lion_tasks = self._create_lion_tasks(lion_groups)
+        adamw_tasks = self._create_adamw_tasks(adamw_groups)
+
+        all_tasks = chain(muon_tasks, lion_tasks, adamw_tasks)
+        runtime = AsyncRuntime(all_tasks, max_concurrent_tasks=3)
+        runtime.run()
+
+        return loss    
+
     def _create_muon_tasks(
         self,
         param_groups: List[dict],
