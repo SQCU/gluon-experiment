@@ -436,5 +436,9 @@ def gluon_update_post_orthogonalize(
 
     # Perform the final weight update using the per-parameter adaptive stepsize t_i.
     # U is multiplied element-wise by T before being subtracted from X.
-    U = torch._foreach_mul(U, T)
+    # diffusion models are untrainable without controlling the stepsize!
+    # the muon adaptive stepsize orthogonalization trick isn't enough by itself!
+
+    T_scaled = torch._foreach_mul(T, base_lr_for_wd)
+    U = torch._foreach_mul(U, T_scaled)
     torch._foreach_sub_(X, U)
