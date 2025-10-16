@@ -94,7 +94,7 @@ class Muon(Optimizer):
             flatten=flatten,
             adjust_lr=adjust_lr,
         )
-        super().__init__(params, defaults)
+        super().__init__(params, **defaults)
 
         # Distributed configuration
         if isinstance(distributed_mesh, DeviceMesh):
