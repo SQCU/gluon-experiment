@@ -45,7 +45,7 @@ setup(
     # Version of the package:
     version=version,
     # Find the package automatically (include everything):
-    packages=find_packages(include=["dion", "dion.*"]),
+    packages=find_packages(include=["gluon_experiment", "gluon_experiment.*"]),
     ## uncomment the following line to include version file
     # package_data={
     #     "dion": ["VERSION"],  # Add the VERSION file
