@@ -112,7 +112,7 @@ class GlazyGloptimizer(Optimizer):
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
 
-    def _initialize_profiling_mode(self, adamw_kwargs):
+    def _initialize_profiling_mode(self):
         """Sets up the optimizer for its first-run profiling phase."""
         print("="*60)
         print("✨ GlazyGloptimizer: Config not found. Starting in Profiling Mode.")
