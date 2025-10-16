@@ -72,6 +72,7 @@ class Gluon(Muon):
         mu: float = 0.95,
         betas: Tuple[float, float] = (0.9, 0.95),
         weight_decay: float = 0.01,
+        algorithm: string = "gluon",
         epsilon: float = 1e-8,
         nesterov: bool = False,
         flatten: bool = False,
@@ -96,7 +97,7 @@ class Gluon(Muon):
             mu=mu,
             betas=betas,    #gee thanks gemini
             weight_decay=weight_decay,
-            algorithm="gluon",
+            algorithm=algorithm,
             step=0,
             epsilon=epsilon,
             nesterov=nesterov,
