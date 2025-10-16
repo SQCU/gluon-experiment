@@ -64,6 +64,8 @@ class Gluon(Muon):
     Distributed Muon implementation by way of samsja: https://github.com/samsja/dion
         (by way of microsoft/dion, ad infinitum)
     """
+# Inside the Gluon class in gluon.py
+
     def __init__(
         self,
         params: ParamsT,
@@ -78,38 +80,27 @@ class Gluon(Muon):
         newton_schulz_func: Optional[Callable] = None,
         distributed_mesh: Optional[Union[DeviceMesh, ProcessGroup]] = None,
     ):
-        # 1. Prepare the parameter groups. This is where we ensure 'algorithm' and L0/L1 exist.
-        #    This does NOT affect the arguments passed to the parent constructor.
+        # 1. Define the master defaults dictionary. This includes the 'step' counter.
+        defaults = dict(
+            lr=lr, mu=mu, beta1=betas[0], beta2=betas[1],
+            weight_decay=weight_decay, epsilon=epsilon, nesterov=nesterov,
+            flatten=flatten, step=0
+        )
+        
+        # 2. Convert params to a list and perform validation
         param_groups = list(params)
-        defaults_for_groups = {
-            'lr': lr, 'mu': mu, 'beta1': betas[0], 'beta2': betas[1],
-            'weight_decay': weight_decay, 'epsilon': epsilon, 'nesterov': nesterov,
-            'flatten': flatten
-        }
         for group in param_groups:
-            # Ensure 'algorithm' key exists in the group for later dispatch.
             group.setdefault("algorithm", "gluon")
-            
             if group["algorithm"] == "gluon":
                 if "l0" not in group or "l1" not in group:
-                    raise ValueError(
-                        "Parameter groups with algorithm='gluon' must include 'l0' and 'l1' keys."
-                    )
-            # Fill in other defaults, just like the base Optimizer does.
-            for k, v in defaults_for_groups.items():
-                group.setdefault(k, v)
+                    raise ValueError("Groups with algorithm='gluon' must include 'l0' and 'l1' keys.")
 
-        # 2. Call the original torch.optim.Optimizer's __init__.
-        #    This is the most fundamental base class. It simply stores the param_groups.
-        #    We create a dummy `defaults` dict here because the base class requires it.
-        Optimizer.__init__(self, param_groups, {})
+        # 3. Call the PyTorch base Optimizer's __init__ WITH the defaults.
+        #    This is the crucial step that will add the 'step' key to each group.
+        Optimizer.__init__(self, param_groups, defaults)
 
-        # 3. CRITICAL FIX: Manually initialize the parts of the Muon optimizer
-        #    that we actually need, using only the arguments it accepts.
-        #    This bypasses the strict signature of Muon.__init__ by setting the
-        #    attributes directly, just like the original Muon.__init__ does.
-        
-        # Copied from the start of Muon.__init__
+        # 4. Manually initialize the Muon-specific (non-hyperparameter) attributes.
+        #    This section remains the same as before.
         if isinstance(distributed_mesh, DeviceMesh):
             if distributed_mesh.ndim != 1:
                 raise ValueError(f"Only 1D DeviceMesh is supported, but got {distributed_mesh.ndim}D.")
@@ -128,7 +119,6 @@ class Gluon(Muon):
             raise TypeError(f"Invalid distributed_mesh type: {type(distributed_mesh)}. Expected DeviceMesh or ProcessGroup.")
         self._distributed_mesh = distributed_mesh
 
-        # Copied from the end of Muon.__init__
         if newton_schulz_func is not None:
             if not callable(newton_schulz_func):
                 raise TypeError(f"newton_schulz_func must be a callable function, got {type(newton_schulz_func)}")
@@ -136,7 +126,6 @@ class Gluon(Muon):
         elif use_triton:
             self._newton_schulz_func = newton_schulz_triton
         else:
-            # We need to import the default function if it's not provided
             from .muon import zeropower_via_newtonschulz5
             self._newton_schulz_func = zeropower_via_newtonschulz5
 
