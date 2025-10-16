@@ -37,7 +37,7 @@ if os.path.exists(readme_path):
 ## will be useful if you use tools like `bump2version` to manage versions
 # with open(os.path.join(this_directory, "dion/VERSION")) as f:
 #     version = f.read().strip()
-version = "0.1.0"  # versions < 1.0 are considered pre-release versions, which allow for breaking changes if necessary
+version = "0.1.1"  # versions < 1.0 are considered pre-release versions, which allow for breaking changes if necessary
 
 setup(
     # Name of the package:

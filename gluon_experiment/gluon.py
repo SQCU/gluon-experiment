@@ -40,7 +40,7 @@ class Gluon(Muon):
         distributed_mesh: DeviceMesh or ProcessGroup for distributed training.
             Use DeviceMesh for FSDP2 and ProcessGroup for DistributedDataParallel.
         lr: Base learning rate. 
-            For Gluon, used *only* for scaling weight decay.
+            For Gluon, this will be scaled based on the history of gradient smoothness in your calibration run.
             For Muon, this will be scaled based on the matrix dimensions.
             For element-wise update rules, this is the actual learning rate and no additional scaling is done.
         mu: Momentum factor for Muon algorithm.
@@ -205,7 +205,7 @@ class Gluon(Muon):
             # [GLUON] Get L0, L1, and the base LR for weight decay
             l0_val = group["l0"]
             l1_val = group["l1"]
-            base_lr_for_wd = torch.tensor(group["lr"])
+            lr = torch.tensor(group["lr"])
 
             # Create batches of parameters of size self._world_size
             for params in create_param_batches(group_params, batch_size=self._world_size):
@@ -254,7 +254,7 @@ class Gluon(Muon):
                         M=pad_batch(momentums, self._world_size),
                         l0=l0_val,
                         l1=l1_val,
-                        base_lr_for_wd=base_lr_for_wd,
+                        lr=lr,
                         momentum=mu,
                         weight_decay=weight_decay,
                         epsilon=epsilon,
@@ -281,7 +281,7 @@ def gluon_update_batch_async(
     M: List[Tensor],
     l0: float,  # Single value, not a list
     l1: float,
-    base_lr_for_wd: Tensor,
+    lr: Tensor,
     momentum: Tensor,
     weight_decay: Tensor,
     epsilon: Tensor,
@@ -405,7 +405,7 @@ def gluon_update_batch_async(
         X=to_local(X),
         U=U,
         T=T,
-        base_lr_for_wd=base_lr_for_wd,
+        lr=lr,
         weight_decay=weight_decay,
     )
 
@@ -413,7 +413,7 @@ def gluon_update_post_orthogonalize(
     X: List[Tensor],
     U: List[Tensor],
     T: List[Tensor],
-    base_lr_for_wd: Tensor,
+    lr: Tensor,
     weight_decay: Tensor,
 ):
     """
@@ -426,19 +426,19 @@ def gluon_update_post_orthogonalize(
         X: List of local parameter tensors (modified in place).
         U: List of normalized momentum tensors from the LMO step.
         T: List of computed adaptive stepsizes (t_i) for each parameter.
-        base_lr_for_wd: The base learning rate, used *only* for scaling weight decay.
+        lr: The base learning rate.
         weight_decay: The weight decay factor.
     """
     # Apply weight decay, scaled by the provided base learning rate.
     # This decouples the regularization strength from the adaptive stepsize.
     if weight_decay > 0:
-        torch._foreach_mul_(X, 1 - base_lr_for_wd * weight_decay)
+        torch._foreach_mul_(X, 1 - lr * weight_decay)
 
     # Perform the final weight update using the per-parameter adaptive stepsize t_i.
     # U is multiplied element-wise by T before being subtracted from X.
     # diffusion models are untrainable without controlling the stepsize!
     # the muon adaptive stepsize orthogonalization trick isn't enough by itself!
 
-    T_scaled = torch._foreach_mul(T, base_lr_for_wd)
+    T_scaled = torch._foreach_mul(T, lr)
     U = torch._foreach_mul(U, T_scaled)
     torch._foreach_sub_(X, U)
