@@ -20,38 +20,50 @@ from .gluon_utils import (
 
 class GlazyGloptimizer(Optimizer):
     """
-    An automated, "just works" optimizer that implements the two-phase workflow
-    for using the Gluon optimizer.
-
-    On the first run with a new model, it operates in **Profiling Mode**:
-    1. It uses a standard AdamW optimizer as a proxy.
-    2. It wraps AdamW with the GluonProfiler to collect smoothness statistics.
-    3. When the training script exits, it automatically analyzes the stats,
-       fits the L0/L1 constants, and saves a `gluon_config.yaml`.
-
-    On all subsequent runs, it operates in **Gluon Mode**:
-    1. It detects the saved config file.
-    2. It loads the L0/L1 constants.
-    3. It instantiates and runs the actual, high-performance Gluon optimizer,
-       fully tuned for the specific model architecture.
-
-    Args:
-        model (torch.nn.Module): The model to be optimized. This is required
-            to create named parameter groups.
-        log_dir (str, optional): Directory to store logs, stats, and the config.
-            Defaults to "./glazy_gluon".
-        **kwargs: Hyperparameters for the AdamW optimizer used during the
-            profiling phase (e.g., `lr`, `weight_decay`, `betas`).
+    Two-phase automated optimizer for Gluon.
+    
+    WORKFLOW:
+    =========
+    Phase 1 (First Run): Profiling Mode
+    ------------------------------------
+    - Detects missing config file
+    - Uses AdamW wrapped with GluonProfiler
+    - Collects gradient smoothness statistics to CSV files
+    - On script exit: runs gluanalyze() → fits (L0, L1) → saves config
+    
+    Phase 2 (Subsequent Runs): Gluon Mode
+    --------------------------------------
+    - Detects existing config file
+    - Loads fitted (L0, L1) constants
+    - Uses actual Gluon optimizer with adaptive stepsizes
+    
+    USAGE:
+    ======
+    ```python
+        # Automatic mode (recommended)
+        optimizer = GlazyGloptimizer(model.parameters(), lr=1e-3)
+        
+        # Training loop (same for both phases)
+        for batch in dataloader:
+            optimizer.zero_grad()
+            loss = model(batch)
+            loss.backward()
+            optimizer.step()  # Profiles in phase 1, optimizes in phase 2
+    ```
+    
+    After first run completes, config is auto-generated.
+    Re-run the same script → automatic switch to Gluon mode.
     """
     def __init__(self, params, log_dir: str = "./glazy_gluon", **kwargs):
         """
         Final, corrected __init__ signature. Conforms to the standard
         torch.optim.Optimizer API: __init__(self, params, **defaults).
 
-        Args:
-            params: The standard iterable of parameters or parameter groups.
-            log_dir (str, optional): Directory to store logs and configs.
-            **kwargs: Hyperparameters for the AdamW profiler and base optimizer.
+            Args:
+            params: Standard PyTorch optimizer parameter format.
+            log_dir: Directory for stats, configs, and logs. Defaults to "./glazy_gluon".
+            **kwargs: Hyperparameters passed to AdamW during profiling phase.
+                Common: lr, weight_decay, betas=(0.9, 0.999)
         """
         # The `params` argument can be an iterator, so we convert it to a list
         # to ensure we can inspect it and pass it on.

@@ -48,6 +48,8 @@ class GluonProfiler:
         self._param_states: Dict[int, Dict[str, Any]] = {}
         self._buffers: Dict[str, deque] = {}
 
+        self.MIN_SAMPLES_FOR_FITTING = 10
+
     def _initialize_state_for_param(self, p: nn.Parameter, group_name: str):
         """Lazy initialization of state and log files for a parameter."""
         if id(p) not in self._param_states:
@@ -205,7 +207,7 @@ def gluanalyze(log_dir: str, lambda_penalty: float = 1.0) -> Dict[str, Any]:
             data = np.loadtxt(csv_file, delimiter=',', skiprows=1)
             
             # Step 2: Check if there's enough data to proceed.
-            if data.shape[0] < 10:
+            if data.shape[0] < self.MIN_SAMPLES_FOR_FITTING:
                 print(f"    - Skipping {group_name}, not enough data points.")
                 continue
             

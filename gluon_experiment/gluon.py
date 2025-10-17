@@ -79,6 +79,7 @@ class Gluon(Muon):
         use_triton: bool = False,
         newton_schulz_func: Optional[Callable] = None,
         distributed_mesh: Optional[Union[DeviceMesh, ProcessGroup]] = None,
+        algorithm = "gluon",
     ):
         # 1. Define the master defaults dictionary. This includes the 'step' counter.
         defaults = dict(
@@ -90,7 +91,7 @@ class Gluon(Muon):
         # 2. Convert params to a list and perform validation
         param_groups = list(params)
         for group in param_groups:
-            group.setdefault("algorithm", "gluon")
+            group.setdefault("algorithm", algorithm)
             if group["algorithm"] == "gluon":
                 if "l0" not in group or "l1" not in group:
                     raise ValueError("Groups with algorithm='gluon' must include 'l0' and 'l1' keys.")
@@ -189,7 +190,7 @@ class Gluon(Muon):
         generate AsyncTask objects so we can process multiple batches concurrently.
         """
         for group in param_groups:
-            if group["algorithm"] != algo_name:
+            if group["algorithm"] not in ["muon", "gluon"]:
                 continue
 
             group_params = [p for p in group["params"] if p.grad is not None]
