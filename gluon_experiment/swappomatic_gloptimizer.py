@@ -16,13 +16,18 @@ class SwappomaticGloptimizer(Gluon):
         and learns a better, Gluon-based "Understudy" policy in the background for each
         parameter group. It autonomously promotes the Understudy based on a distributed
         consensus protocol that measures policy superiority.
-
-        Args:
-            params (iterable): Iterable of parameters to optimize or dicts defining
-                parameter groups.
-            **defaults: Default hyperparameters. Includes standard optimizer args like `lr`,
-                as well as Swappomatic-specific args like `swap_check_interval`,
-                `threshold_bias`, `threshold_confidence`, `meta_lr`, etc.
+        ...
+        During initialization, this method iterates through the parameter groups and injects
+        the necessary state for the Swappomatic protocol. For each group, it adds:
+        - `algorithm`: Set to 'adamw' by default (the primordial Actor).
+        - `cfct_l0`, `cfct_l1`: The Understudy's trainable meta-model parameters.
+        - `projection_seed`: A deterministic integer seed for the on-the-fly gradient sketch.
+        - `grad_sketch_prev`, `grad_norm_sq_prev`: The O(d) sketch history buffers.
+        - `telemetry_buffer_UN`, `telemetry_buffer_MDN`: The O(1) in-place telemetry buffers.
+        - `last_actor_norm`: A float caching the previous step's actor update norm.
+        - `ema_R`, `var_R_state`: Buffers for the behavioral statistics.
+        - `local_cost`: A float for the group's contribution to the swap decision.
+        ...
         """
         super().__init__(params, **defaults)
         for group in self.param_groups:
@@ -35,16 +40,26 @@ class SwappomaticGloptimizer(Gluon):
             group['grad_sketch_prev'] = torch.zeros(sketch_dim, device=device)
             group['grad_norm_sq_prev'] = torch.zeros(1, device=device)
             group['last_actor_norm'] = 0.0 # Will store the scalar norm from step k-1
-            group['telemetry_buffer_UN'] = torch.zeros(1, device=device)
+            group['U_N'] = torch.zeros(1, device=device)
             # ... (ema_R, var_R_state, etc.) ...
 
     @torch.no_grad()
     def step(self, closure=None):
         """
-        Performs a single, potentially adaptive, optimization step.
-
-        This method orchestrates the Swappomatic protocol by wrapping a call to the
-        superclass's `step` method, which handles the complex async dispatch.
+        ...
+        This method implements an 'off policy'/'online statistics' optimizer switching scheduler, orchestrated in five blocks:
+        1. control flow logic for yeeting out of date optimizers with hysteretic or covariate shifted parameters
+        2. A gradient norm extraction + low rank compression of live `p.grad` tensors to
+        pass along a representation useable to approximate the norm of gradient differences across steps.
+        this is miserably complicated in one or two ways but replaces an adam-sized momentum cache with ~128*1 parameters per parameter *group*
+        i.e. one 512x512 dim linear projection matrix -> 128x1 dim bottleneck -> proxy calculation for ||diff(old 512x512 gradient, new 512x512 gradient)||
+        ergo ~ 1/2048 compression ratio (of gradient diff norm related information).
+        3. A call to `super().step()`, which does more ordinary sorts of stuff to call modified async task generators,
+        execute the 'Actor' optimizer's update and mutate update norm buffers.
+        4. A **post-step evaluation phase** that estimates the counterfactual benefit of swapping optimizer 'policies' for the step, 
+        then computing a cost function to implement a swap propensity control hyperparameter.
+        5. A sparse, non-blocking initiation/polling of the distributed cost function check.
+        ...
         """
         # Block 1: Check and Execute Deferred Swap
         if self.swap_is_pending:
@@ -280,13 +295,17 @@ class SwappomaticGloptimizer(Gluon):
         """
         Performs the pre-step, zero-copy observation and meta-learning phase.
 
-        This function is the core of the telemetry system. For each parameter group, it:
-        1. Operates directly on the live `p.grad` tensors (G[k]).
-        2. Calls the sketch protocol to reconstruct the gradient difference norm `‖G[k]-G[k-1]‖'`.
-        3. Updates the persistent sketch buffers (`grad_sketch_prev`, etc.) for the next step.
-        4. Calculates the smoothness proxy `L-hat` for the previous step (`k-1`).
-        5. Trains the Understudy's meta-model using this `L-hat` value.
-        6. Calculates the hypothetical update norm for the Understudy's policy for this step.
+        This function is called *before* the main optimizer step. It operates directly
+        on the live `p.grad` tensors (representing G[k]) to learn from the transition
+        between step k-1 and k. For each parameter group, it:
+        1. Calls the gradient sketch protocol (`_sketch_and_reconstruct_norm_from_seed`)
+        to get the approximate gradient difference norm `‖G[k]-G[k-1]‖'`.
+        2. Updates the group's persistent sketch history buffers for the next iteration.
+        3. Calculates the smoothness proxy `L-hat` for the *previous* step (`k-1`) by
+        normalizing the reconstructed norm by `‖ΔX[k-1]‖`.
+        4. Trains the Understudy's meta-model using this newly computed `L-hat`.
+        5. Calculates the hypothetical update norm for the Understudy's policy for the
+        *current* step (`k`) and returns it for later evaluation.
 
         Returns:
             Dict[int, Tensor]: A dictionary mapping each group's index to the scalar tensor
@@ -326,12 +345,15 @@ class SwappomaticGloptimizer(Gluon):
         """
         Performs the post-step policy evaluation and updates the swap cost.
 
-        This function is called after the Actor's step has been performed. It:
-        1. Retrieves the Actor's update norm from the telemetry buffer.
-        2. Compares it to the Understudy's hypothetical norm (calculated pre-step).
-        3. Updates the behavioral statistics (`EMA(R)`, `Var(R)`).
-        4. Calculates the Swap Pressure and updates the local and global cost accumulators.
-        5. Caches the Actor's norm for the next iteration's smoothness calculation.
+        This function is called *after* the Actor's step has been performed. It evaluates
+        the policy disagreement for the transition from step `k` to `k+1`. It:
+        1. Retrieves the Actor's update norm for step `k` (`‖ΔX[k]‖`) from the
+        group's telemetry buffer, which was populated during `super().step()`.
+        2. Compares it to the Understudy's hypothetical norm for step `k`, which was
+        calculated pre-step in `_observe_and_learn_from_gradients`.
+        ...
+        5. Caches the Actor's norm (`‖ΔX[k]‖`) into `group['last_actor_norm']` so it can be
+        used in the *next* iteration's smoothness calculation.
 
         Args:
             hypothetical_norms (Dict[int, Tensor]): The transient dictionary of Understudy
@@ -348,7 +370,7 @@ class SwappomaticGloptimizer(Gluon):
                 continue
             
             # Step 1: Get Actor's norm for the step that just happened
-            actor_norm = group['telemetry_buffer_UN'].item()
+            actor_norm = group['U_N'].item()
             
             # Step 2: Get Understudy's norm
             understudy_norm = hypothetical_norms[i].item()
@@ -380,15 +402,12 @@ class SwappomaticGloptimizer(Gluon):
         Performs a single gradient descent step on the Understudy's (L0, L1) meta-model.
 
         This function treats the group's 'cfct_l0' and 'cfct_l1' as trainable parameters.
-        It calculates the gradient of the fitting loss (MSE with underestimation penalty)
-        with respect to these parameters and applies a simple SGD update.
-
-        Args:
-            group (Dict): The parameter group whose Understudy model is being trained.
-                The 'cfct_l0' and 'cfct_l1' keys will be modified in-place.
-            l_hat_actual (Tensor): The ground truth smoothness target for this step.
-            grad_norm (Tensor): The norm of the gradient at the start of the step, which
-                is a feature for the meta-model.
+        It uses a hardened SGD approach to ensure stability when learning from a noisy
+        signal. The process involves:
+        1. Calculating the gradient of the fitting loss (MSE with underestimation penalty).
+        2. **Clipping the gradients** to a reasonable range to prevent explosive updates.
+        3. Applying the update using a small, fixed `meta_lr`.
+        4. Clamping the resulting `cfct_l0` and `cfct_l1` to be non-negative.
 
         Returns:
             None. Modifies the group dictionary in-place.
@@ -472,66 +491,61 @@ class SwappomaticGloptimizer(Gluon):
 
         # In swappomatic_gloptimizer.py, inside the SwappomaticGloptimizer class
 
-    def _sketch_and_reconstruct_norm_from_seed(
-        current_gradients: List[Tensor],
-        projection_seed: int,
-        sketch_dim: int,
-        previous_sketch: Tensor,
-        previous_norm_sq: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """
-        Computes a new gradient sketch and reconstructs the norm of the difference.
+def _sketch_and_reconstruct_norm_from_seed(
+    current_gradients: List[Tensor],
+    projection_seed: int,
+    sketch_dim: int,
+    previous_sketch: Tensor,
+    previous_norm_sq: Tensor
+) -> tuple[Tensor, Tensor, Tensor]:
+    """
+    Computes a new gradient sketch and reconstructs the norm of the difference.
 
-        This function implements a memory-efficient streaming algorithm. It uses a
-        deterministic seed to generate a random projection matrix on-the-fly, uses it for
-        computation, and immediately discards it. This avoids storing the large O(d*D)
-        matrix, ensuring the persistent memory overhead is only O(d) per group.
+    This function implements a memory-efficient streaming algorithm. It uses a
+    deterministic seed to generate a random projection matrix on-the-fly, uses it for
+    computation, and immediately discards it. This avoids storing the large O(d*D)
+    matrix, ensuring the persistent memory overhead is only O(d) per group.
 
-        The core of the method is the algebraic expansion:
-        ‖G[k] - G[k-1]‖² = ‖G[k]‖² + ‖G[k-1]‖² - 2 * <G[k], G[k-1]>
-        where the dot product is approximated via the random projection.
+    The core of the method is the algebraic expansion:
+    ‖G[k] - G[k-1]‖² = ‖G[k]‖² + ‖G[k-1]‖² - 2 * <G[k], G[k-1]>
+    where the dot product is approximated via the random projection.
 
-        Args:
-            current_gradients (List[Tensor]): G[k] for the parameter group.
-            projection_seed (int): A deterministic seed used to regenerate the projection matrix.
-            sketch_dim (int): The dimensionality 'd' of the low-rank sketch.
-            previous_sketch (Tensor): The sketch of the last step's gradient (S @ G[k-1]).
-            previous_norm_sq (Tensor): The squared norm of the last step's gradient (‖G[k-1]‖²).
+    Args:
+        current_gradients (List[Tensor]): G[k] for the parameter group.
+        projection_seed (int): A deterministic seed used to regenerate the projection matrix.
+        sketch_dim (int): The dimensionality 'd' of the low-rank sketch.
+        previous_sketch (Tensor): The sketch of the last step's gradient (S @ G[k-1]).
+        previous_norm_sq (Tensor): The squared norm of the last step's gradient (‖G[k-1]‖²).
 
-        Returns:
-            tuple[Tensor, Tensor, Tensor]: A tuple containing:
-                - The reconstructed norm of the difference (scalar `‖...‖'`).
-                - The new sketch for the current gradient (`S @ G[k]`).
-                - The new squared norm for the current gradient (`‖G[k]‖²`).
-        """
-        # ... (Implementation as reviewed, using the seed to generate S on-the-fly
-        #      and using the corrected 1/d scaling factor or sqrt(d) initialization) ...
+    Returns:
+        tuple[Tensor, Tensor, Tensor]: A tuple containing:
+            - The reconstructed norm of the difference (scalar `‖...‖'`).
+            - The new sketch for the current gradient (`S @ G[k]`).
+            - The new squared norm for the current gradient (`‖G[k]‖²`).
+    """
+    flat_grad = torch.cat([g.view(-1) for g in current_gradients])
+    D = flat_grad.numel()
+    d = sketch_dim
+    
+    # Generate S on-the-fly from the seed
+    rng_state = torch.random.get_rng_state()
+    torch.manual_seed(projection_seed)
+    S = torch.randn(d, D, device=flat_grad.device, dtype=flat_grad.dtype) / math.sqrt(d)
+    torch.random.set_rng_state(rng_state)  # Restore original RNG state
+    
+    # Use it
+    current_sketch = torch.mv(S, flat_grad)
 
-        flat_current_grad = torch.cat([g.view(-1) for g in current_gradients])
+    # S is automatically freed when function returns
+    del S
 
-        # --- FJLT Sketch Computation (Memory-Efficient) ---
-        # This sequence replaces the single torch.mv with the dense matrix.
-        # Note: A real implementation would use a specialized library for FWHT.
-        # 1. H: Apply Fast Walsh-Hadamard Transform
-        transformed_grad = fast_walsh_hadamard_transform(flat_current_grad)
-        # 2. P: Apply random signs
-        signed_grad = transformed_grad * group_state['projection_seed']
-        # 3. D: Subsample to get the sketch
-        current_sketch = signed_grad[group_state['fjlt_d_indices']]
+    # --- Remainder of the function is the same, but with NO scaling factor ---
+    current_norm_sq = torch.dot(flat_current_grad, flat_current_grad)
+    
+    # Dot product in sketch space - FJLT is constructed to be orthonormal
+    dot_product_approx = torch.dot(current_sketch, previous_sketch)
 
-        # --- Remainder of the function is the same, but with NO scaling factor ---
-        current_norm_sq = torch.dot(flat_current_grad, flat_current_grad)
-        
-        # Dot product in sketch space - FJLT is constructed to be orthonormal
-        dot_product_approx = torch.dot(current_sketch, group_state['grad_sketch_prev'])
+    reconstructed_norm_sq = current_norm_sq + previous_norm_sq - 2 * dot_product_approx
+    reconstructed_norm = torch.sqrt(torch.clamp(reconstructed_norm_sq, min=1e-12))
 
-        reconstructed_norm_sq = current_norm_sq + group_state['grad_norm_sq_prev'] - 2 * dot_product_approx
-        reconstructed_norm = torch.sqrt(torch.clamp(reconstructed_norm_sq, min=1e-12))
-
-        return reconstructed_norm, current_sketch, current_norm_sq
-
-# wrapper making adamw_update_foreach_async swappomatic
-# we need this to override muon's adamw wrapper so we can pass along our `U_N`
-
-# wrapper making gluon_update_batch_async swappomatic
-# we need this to override gluon's async wrapper so we can pass along our `U_N`
+    return reconstructed_norm, current_sketch, current_norm_sq

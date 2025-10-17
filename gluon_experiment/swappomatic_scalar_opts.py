@@ -21,8 +21,9 @@ def swappomatic_adamw_update_foreach(
     """
     Swappomatic-aware AdamW optimizer algorithm (foreach implementation).
 
-    Performs the standard AdamW update and, as a side-effect, calculates the
-    L2 norm of the full update vector and writes it in-place to the U_N buffer.
+    In addition to the standard AdamW update, this function performs two telemetry side-effects:
+    1. It calculates the L2 norm of the policy-driven update vector (excluding weight decay)
+   and writes it in-place to the `U_N` buffer.
 
         Args:
         ...
@@ -103,19 +104,15 @@ def swappomatic_gluon_update_post_orthogonalize(
             the update vector will be written here in-place.
         ...
     """
-    #assert U_N.numel() == 1, "Update norm buffer U_N must be a scalar tensor."
-    # no asserts! graph breaks or something!
 
     # 1. Calculate the final update vectors.
     #    update_vectors = lr * T * U
     T_scaled = torch._foreach_mul(T, lr)
     U = torch._foreach_mul(U, T_scaled)
-    torch._foreach_sub_(X, U)
     # --- SWAPPOMATIC MODIFICATION START ---
     # 2. Compute the L2 norm and write it to the buffer.
     norm_val = torch.linalg.vector_norm(U)
     U_N.fill_(norm_val) # In-place write to the output buffer.
-
     # --- SWAPPOMATIC MODIFICATION END ---
     
     # Apply weight decay, scaled by the provided base learning rate.
