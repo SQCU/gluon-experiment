@@ -48,14 +48,22 @@ class SwappomaticGloptimizer(Gluon):
         """
         ...
         This method implements an 'off policy'/'online statistics' optimizer switching scheduler, orchestrated in five blocks:
-        1. control flow logic for yeeting out of date optimizers with hysteretic or covariate shifted parameters
-        2. A gradient norm extraction + low rank compression of live `p.grad` tensors to
-        pass along a representation useable to approximate the norm of gradient differences across steps.
+        1. control flow logic for yeeting out of date optimizers unable to adapt to the online gradient history,
+        analogically 'promoting' an 'understudy' optimizer 
+        (meta-optimized for gluon smoothness parameters reflecting the online gradient distribution)
+        to replace the previous 'actor' optimizer, which is an offline gluon, muon, or adam optimizer 
+        (whose configuration is no(t/ no longer) updated by gradient smoothness statistics.
+        this online, offline 'optimizer pair' (really, two collections of optimizer hyperparameters)
+        gives you all of the 'juice' of second order adaptive optimization (best case guarantees on optimal update trajectory)
+        with none of the 'squeeze' (chaotic and training-run-destroying oscillations or stalled second order online parameters)
+        2. A gradient norm extraction + low rank compression of live `p.grad` tensors (G[k]) to
+        pass along a representation useable to approximate the norm of gradient differences (`‖G[k]-G[k-1]‖'`) across steps (`k`).
         this is miserably complicated in one or two ways but replaces an adam-sized momentum cache with ~128*1 parameters per parameter *group*
         i.e. one 512x512 dim linear projection matrix -> 128x1 dim bottleneck -> proxy calculation for ||diff(old 512x512 gradient, new 512x512 gradient)||
         ergo ~ 1/2048 compression ratio (of gradient diff norm related information).
-        3. A call to `super().step()`, which does more ordinary sorts of stuff to call modified async task generators,
-        execute the 'Actor' optimizer's update and mutate update norm buffers.
+        3. A call to `super().step()`, 
+        which does more ordinary sorts of stuff to call modified async task generators,
+        execute the 'Actor' optimizer's update and mutate update norm buffers (`‖ΔX[k]‖`).
         4. A **post-step evaluation phase** that estimates the counterfactual benefit of swapping optimizer 'policies' for the step, 
         then computing a cost function to implement a swap propensity control hyperparameter.
         5. A sparse, non-blocking initiation/polling of the distributed cost function check.

@@ -175,7 +175,7 @@ def _fit_l0_l1(data: np.ndarray, lambda_penalty: float = 1.0):
     
     return result.x[0], result.x[1] # l0, l1
 
-def gluanalyze(log_dir: str, lambda_penalty: float = 1.0) -> Dict[str, Any]:
+def gluanalyze(log_dir: str, lambda_penalty: float = 1.0, _min_samples_for_fitting=10) -> Dict[str, Any]:
     """
     Analyzes profiling logs to fit L0/L1 constants for each parameter group.
 
@@ -207,7 +207,7 @@ def gluanalyze(log_dir: str, lambda_penalty: float = 1.0) -> Dict[str, Any]:
             data = np.loadtxt(csv_file, delimiter=',', skiprows=1)
             
             # Step 2: Check if there's enough data to proceed.
-            if data.shape[0] < self.MIN_SAMPLES_FOR_FITTING:
+            if data.shape[0] < _min_samples_for_fitting:
                 print(f"    - Skipping {group_name}, not enough data points.")
                 continue
             

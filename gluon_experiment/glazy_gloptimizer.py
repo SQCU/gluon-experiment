@@ -183,7 +183,7 @@ class GlazyGloptimizer(Optimizer):
         self._internal_optimizer.flush()
 
         try:
-            config = gluanalyze(log_dir=str(self.profiler_stats_dir))
+            config = gluanalyze(log_dir=str(self.profiler_stats_dir), _min_samples_for_fitting=10)
             save_gluon_config(config, path=str(self.config_path))
             self.logger.info(f"Successfully generated and saved config to {self.config_path}")
             print(f"✅ Analysis complete. Config saved to: {self.config_path}")
