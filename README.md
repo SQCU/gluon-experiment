@@ -1,9 +1,10 @@
-# Dion: Distributed Orthonormal Updates
+# gluon! stuff!: (maybe) Distributed (post-)Orthonormal(-ization gradient history smoothness gated) Updates
 
-This repository provides efficient implementations of Dion and Muon optimizers for distributed ML training.
+This repository provides ~~efficient~~ implementations of Dion and Muon and Gluon optimizers for distributed ML training.
  
 * See our paper for more information on Dion: https://arxiv.org/pdf/2504.05295.
 * See the original blog post on Muon: https://kellerjordan.github.io/posts/muon/
+* See higher order optimizer yearning-thread on gluon-era adaptive optimizers: https://x.com/sameQCU/status/1978851744504299944
 
 ## Table of Contents
 <details>
@@ -41,44 +42,35 @@ This code is written for modern PyTorch (version 2.7 or newer) using DTensor-bas
 
 ## Quick Start
 
-Dion and Muon optimizers are available as a `pip` package! Install to use in your project:
+Dion and Muon optimizers are available as `uv`-installable git package! This is the git package! Install to use in your project:
 
-```bash
-pip install git+https://github.com/microsoft/dion.git
+```pyproject.toml
+"pip install "gluon-experiment @ git+https://github.com/sqcu/gluon-experiment.git"
 ```
 
 Then in your code, you can use:
 
 ```python
-from dion import Dion, Muon
+from gluon_experiment import Gluon
+from gluon_experiment.gluon_utils import (
+    GluonProfiler,
+    gluanalyze,
+    save_gluon_config,
+    load_gluon_config,
+    gluon_that_model,
+)
 ```
 
-Please carefully go through this readme for detailed instructions on using our optimizers. There are major differences compared to PyTorch built-in optimizers, like `Adam`/`AdamW`.
-
-### Running Our Sample Training Script
-
-First clone this repo, then install dependencies for both Dion and training code:
-```bash
-git clone https://github.com/microsoft/dion.git
-cd dion
-pip install -e .[train]
+or:
+```python
+from gluon_experiment import GlazyGloptimizer
+#use this like an adamw optimizer and follow along with the magical logprints following a 'warmup run' using your existing adamw configuration!
 ```
 
-Download pretokenized FineWeb dataset:
-```bash
-python data/cached_fineweb10B.py 30
-```
-
-### Distributed Data Parallel (DDP) Training
-
-To train a GPT-small model using Dion with 8 GPUs (adjust as needed for your setup):
-```bash
-torchrun --standalone --nproc_per_node=8 train.py --config configs/dion_160m.yaml
-```
-This will launch Distributed Data Parallel (DDP) training.
+Please carefully go through this readme for detailed instructions on using our optimizers. There are major differences compared to PyTorch built-in optimizers, like `Adam`/`AdamW`. There are also major differences between `gluon` and `muon`/`dion`.
 
 ### Advanced FSDP / TP / Hybrid Sharded Training
-
+#### caution: obsolete and untested. 
 To enable more advanced distributed strategies such as Fully Sharded Data Parallel (FSDP) and Tensor Parallelism (TP), you can specify the configuration in the `dion_160m.yaml` file: 
 
 ```yaml
@@ -98,17 +90,23 @@ torchrun --standalone --nproc_per_node=8 train.py --config configs/dion_160m.yam
 ```
 
 ####  Example Weights & Biases (wandb) Plots
+##### caution: obsolete and untested
+did you know that the gradient smoothness history of your model is one of those 'wittgensteins ruler' type situations?
 
-With the appropriate configuration, you should be able to reproduce the results shown in the [validation curves for GPT-small](https://microsoft-research.wandb.io/t-gmagakyan/dion-exp/reports/Validation-curves-for-GPT-small--VmlldzoxNjk5OA?accessToken=52e6z4d18yfkewz1bawlkmwc2m91al9ssa7rpwvnx1f1xa66j15lr7x315wj2kys).
+regrettably you'll need to write bespoke and original parsing code to interpret the warmup gradient statistics runs.
+
+optimally configured gluon optimization runs are rumored to have better loss descent and equivalent (loss <-> eval) generalization than the correspondence between adam loss descent and adam eval generalization. but you're wandering into untested territory here, and you need to *think* about what you're logging. 
 
 
 ## Introduction
 
-Optimization algorithms are essential to training neural networks, converting gradients into model weight updates to minimize loss. For many years, the state-of-the-art method has been Adam/AdamW. However, recent work has shown that **orthonormalized matrix updates** can significantly accelerate model convergence. See [Bernstein and Newhouse, 2025](https://openreview.net/forum?id=hErdffTsLu) for a theoretical justification.
+recent work has shown that **orthonormalized matrix updates** can significantly accelerate model convergence compared to adam/adamw. See [Bernstein and Newhouse, 2025](https://openreview.net/forum?id=hErdffTsLu) for a theoretical justification.
 
-The practical effectiveness of orthonormal updates was first demonstrated by [Muon](https://kellerjordan.github.io/posts/muon/) in the [NanoGPT speedrun](https://github.com/KellerJordan/modded-nanogpt), and has since been validated at scale by models such as [Kimi K2](https://arxiv.org/abs/2507.20534) and [GLM-4.5](https://z.ai/blog/glm-4.5). Muon implements orthonormalization via *Newton-Schulz iterations*, which relies on repeated matrix-matrix multiplications. However, large-scale training relies on model sharding, where weight matrices and optimizer states are distributed across multiple processes. As discussed by [Essential AI](https://www.essential.ai/blog/infra), orthonormalizing a sharded matrix with Newton-Schulz iterations involves the communication-intensive procedure of reconstructing the full matrices from their individual shards.
+[Muon](https://kellerjordan.github.io/posts/muon/) popularized orthonormal update rules in the [NanoGPT speedrun](https://github.com/KellerJordan/modded-nanogpt), and has since been validated at scale by models such as [Kimi K2](https://arxiv.org/abs/2507.20534) and [GLM-4.5](https://z.ai/blog/glm-4.5). Muon implements orthonormalization via *Newton-Schulz iterations*, which relies on repeated matrix-matrix multiplications. However, large-scale training relies on model sharding, where weight matrices and optimizer states are distributed across multiple processes. As discussed by [Essential AI](https://www.essential.ai/blog/infra), orthonormalizing a sharded matrix with Newton-Schulz iterations involves the communication-intensive procedure of reconstructing the full matrices from their individual shards.
 
-**Dion** is our approach for a more **scalable and communication-efficient** optimizer. Like Muon, it computes orthonormal weight updates and has the same benefits of faster model convergence. The difference is that Dion uses an alternative orthonormalization method based on amortized power iteration (in the style of [PowerSGD](https://arxiv.org/pdf/1905.13727)), which can be applied directly on sharded matrices. Furthermore, Dion introduces a *rank fraction* hyperparameter, allowing for compute and communication reduction via low-rank compression. To mitigate information loss, Dion adds an error feedback mechanism that captures the difference between the original matrix and its low-rank approximation.
+**Dion** is the upstream's approach for a more **scalable and communication-efficient** optimizer. Like Muon, it computes orthonormal weight updates and has the same benefits of faster model convergence. The difference is that Dion uses an alternative orthonormalization method based on amortized power iteration (in the style of [PowerSGD](https://arxiv.org/pdf/1905.13727)), which can be applied directly on sharded matrices. Furthermore, Dion introduces a *rank fraction* hyperparameter, allowing for compute and communication reduction via low-rank compression. To mitigate information loss, Dion adds an error feedback mechanism that captures the difference between the original matrix and its low-rank approximation.
+
+**gluon** is some alternate work branching from Muon proposing a post-muon-orthonormalization update rule which imports some [well-justified offline statistics](https://arxiv.org/html/2505.13416v1#A5.SS2) measured at the granularity of individual neural network modules. read `Figure 12:` extremely carefully: gluon is a collection of tuned-or-learned inductive biases for the module-by-module 'gradient smoothness'. as this reveals a horrifying and beguiling (network, loss function, training data encoding) entanglement of 'correct' optimizer parameters, implementing the `l_0`, `l_1` statistics capture code is the more involved and complicated requirement to begin testing and applying the gluon adaptive optimizer to unseen network architecture, loss function, and data distribution combinations. to make the interpretation and testing of the muon-and-friends adaptive optimizer family less 'bogus' and 'grid search oriented', a `glazy gloptimizer` wrapper supports (g)lazily integrating the gluon optimizer into existing training methods. directly replacing a prosaic `adam`/`adamw` optimizer with a glazy gloptimizer should 'tutorialize' the workflow of measuring existing training methods, then integrating `gluon` updates into your existing training and eval logging and metrics. good luck! 
 
 
 ## Optimizers
@@ -125,13 +123,24 @@ Our main implementations of Dion (`dion.py`) and Muon (`muon.py`) support the fo
 For faster performance, both of these optimizers will process parameters in batches and interleave multiple batches to overlap compute with communication.
 
 We include Dion, Muon, and several alternative implementations of the optimizers in the `optimizers/` directory of this repo.
- 
+
+### upstream:
+
 * `dion.py`: High-performance version of Dion. Depending on how each batch of matrices is sharded, we select the best communication patterns to compute Dion's orthonormal update. All-reduce operations may be split into reduce-scatter and all-gather across the batch dimension to more efficiently distribute work and avoid redundant computation.
 * `muon.py`: High-performance version of Muon. For sharded matrices, all-to-all communication is used to simultaneously unshard and distribute a batch of matrices. For replicated matrices, Muon will distribute work across all devices and all-gather final results.
 * `dion_reference.py`: An implementation without batching, communication overlapping, or split all-reduce. This version of Dion is intended to closely follow the algorithms as described in our [Dion paper](https://arxiv.org/pdf/2504.05295).
 * `dion_simple.py`: A simplified illustration of the Dion update rule in a single Python function, provided for educational value.
 * `muon_reference.py`: A version of Muon by [Moonshot AI](https://github.com/MoonshotAI/Moonlight), modified to take similar arguments as `muon.py`.
 
+### this repo:
+
+* `gluon.py`: from [2505.13416v1]
+* `gluon_utils.py`: motivated by [2505.13416v1]
+* `glazy_gloptimizer.py`: ???
+
+## special warning about weight decay:
+
+we support some kind of wack optimizer hyperparameter passthrough to map the 'weight decay' hyperparameter perpetually included in other people's suggested adamw configurations. intriguingly, the gluon gradient smoothness gated update rule appears to 'fix' the same family of problems 'fixed' by L2 norm losses and 'weight decay'. if you use weight decay in your optimizer configuration while training with `gluon`, it is very likely you will find optimized parameters `decayed` to zero faster than they `update`. we would suggest not using weight decay! we updated this readme in this commit chiefly to package this cautionary advice!
 
 ## Building Parameter Groups
 
