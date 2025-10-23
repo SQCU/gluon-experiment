@@ -303,7 +303,7 @@ def gluon_update_batch_async(
     assert len(X) == len(M)
     assert len(X) == world_size
     
-    grad_dtype = local_G[0].dtype # Get the dtype, e.g., bfloat16
+    grad_dtype = G[0].dtype # Get the dtype, e.g., bfloat16
     # Create tensors once here
     #this part is changed to transdfuce the function operands to the next function
     L0s_tensor = torch.tensor(l0, device=X[0].device, dtype=grad_dtype)
