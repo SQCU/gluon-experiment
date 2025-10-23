@@ -73,7 +73,7 @@ class Gluon(Muon):
         mu: float = 0.95,
         betas: Tuple[float, float] = (0.9, 0.95),
         weight_decay: float = 0.01,
-        epsilon: float = 1e-8,
+        epsilon: float = 1e-7,  #revise for bf16 representational range i guess
         nesterov: bool = False,
         flatten: bool = False,
         use_triton: bool = False,
@@ -302,11 +302,13 @@ def gluon_update_batch_async(
     assert len(X) == len(G)
     assert len(X) == len(M)
     assert len(X) == world_size
-
+    
+    grad_dtype = local_G[0].dtype # Get the dtype, e.g., bfloat16
     # Create tensors once here
     #this part is changed to transdfuce the function operands to the next function
-    L0s_tensor = torch.tensor(l0, device=X[0].device)
-    L1s_tensor = torch.tensor(l1, device=X[0].device)
+    L0s_tensor = torch.tensor(l0, device=X[0].device, dtype=grad_dtype)
+    L1s_tensor = torch.tensor(l1, device=X[0].device, dtype=grad_dtype)
+    epsilon = epsilon.to(device=X[0].device, dtype=grad_dtype)
 
     # Update momentum and compute the inputs for orthogonalization
     U = muon_update_pre_orthogonalize(
