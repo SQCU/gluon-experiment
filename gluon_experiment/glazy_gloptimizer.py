@@ -219,24 +219,38 @@ class GlazyGloptimizer(Optimizer):
         hyperparams = config.get("hyperparameters", {})
         overrides = hyperparams.get("overrides", {})
         default_hparams = hyperparams.get("default", {})
-
+        n_mtrx_params   = 0
+        n_non_mtrx_params = 0
         new_param_groups = []
         for group in self.param_groups:
             group_name = group.get('name', 'default')
+            # --- Parameter-Aware Logic ---
+            # We need to determine if this group is for matrices or scalars.
+            # We can do this by checking the dimension of the first parameter in the group.
+            # This assumes all params in a group are of the same type, which is true
+            # for how lora_alt's prepare_optimizer_params creates them.
+            is_matrix_group = False
+            if 'params' in group and len(group['params']) > 0:
+                # Check the dimension of the first tensor in the list
+                first_param_dim = group['params'][0].dim()
+                if first_param_dim == 2: # Or >= 2 if you want to be more lenient
+                    is_matrix_group = True
             
             # Find the right config for this group
             group_config = overrides.get(group_name, default_hparams)
             
-            if "l0" in group_config and "l1" in group_config:
+            if is_matrix_group and "l0" in group_config and "l1" in group_config:
                 group['algorithm'] = 'gluon'
                 group['l0'] = group_config['l0']
                 group['l1'] = group_config['l1']
+                n_mtrx_params+=1
             else:
                 group['algorithm'] = 'adamw'
+                n_non_mtrx_params +=1
             
             new_param_groups.append(group)
         
-        print("[GlazyGloptimizer] Applied Gluon config to parameter groups.")
+        print(f"[GlazyGloptimizer] Applied Gluon config to {n_mtrx_params} parameter groups, failover adamw to {n_non_mtrx_params} parameter groups.")
         return new_param_groups
 
     # --- Pass-through methods to the internal optimizer ---
